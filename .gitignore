@@ -1,0 +1,23 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Test sample videos (~4.7 MB each). They live in the user's Downloads folder
+# and are referenced by the Python lab in place; androidTest copies them in
+# locally. Not committed to keep the repo small.
+/app/src/androidTest/assets/*.mp4
+
+# Emulator / tooling noise
+/.kotlin
