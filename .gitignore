@@ -21,3 +21,6 @@ local.properties
 
 # Emulator / tooling noise
 /.kotlin
+
+# IDE metadata that churns on its own
+/.idea/
