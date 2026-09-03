@@ -9,7 +9,6 @@ import com.example.ikyky.core.logging.AndroidLogger
 import com.example.ikyky.core.media.MediaMetadataFrameExtractor
 import com.example.ikyky.core.media.MediaMetadataVideoReader
 import com.example.ikyky.core.ml.detector.MlKitFaceDetector
-import com.example.ikyky.core.ml.tracking.GreedyFaceTracker
 import com.example.ikyky.features.processing.data.DefaultProcessVideoUseCase
 import com.example.ikyky.features.processing.data.repository.InMemoryProcessingResultRepository
 import com.example.ikyky.features.processing.domain.model.ProcessingProgress
@@ -61,8 +60,7 @@ class Sample1PipelineTest {
             metadataReader = MediaMetadataVideoReader(context, dispatchers),
             frameExtractor = MediaMetadataFrameExtractor(context, dispatchers),
             faceDetector = detector,
-            faceTracker = GreedyFaceTracker(),
-            resultRepository = resultRepo,
+                        resultRepository = resultRepo,
             dispatchers = dispatchers,
             logger = AndroidLogger(),
         )

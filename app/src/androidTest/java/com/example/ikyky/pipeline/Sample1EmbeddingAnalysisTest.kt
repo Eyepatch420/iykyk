@@ -14,7 +14,6 @@ import com.example.ikyky.core.ml.embedding.LiteRtFaceEmbedder
 import com.example.ikyky.core.ml.model.EmbeddingModelLoader
 import com.example.ikyky.core.ml.model.ModelSpec
 import com.example.ikyky.core.ml.preprocessing.DefaultFacePreprocessor
-import com.example.ikyky.core.ml.tracking.GreedyFaceTracker
 import com.example.ikyky.core.model.FaceEmbedding
 import com.example.ikyky.features.processing.data.DefaultGenerateAppearanceEmbeddingsUseCase
 import com.example.ikyky.features.processing.data.DefaultProcessVideoUseCase
@@ -64,8 +63,7 @@ class Sample1EmbeddingAnalysisTest {
             metadataReader = metaReader,
             frameExtractor = extractor,
             faceDetector = detector,
-            faceTracker = GreedyFaceTracker(),
-            resultRepository = repo,
+                        resultRepository = repo,
             dispatchers = dispatchers,
             logger = AndroidLogger(),
         )

@@ -43,13 +43,46 @@ class AppearanceEmbeddingAggregatorTest {
     }
 
     @Test
-    fun singleOutlier_isDropped_notAllowedToDominate() {
+    fun frozenMeanMode_keepsEveryMember_andDoesNotRejectOutliers() {
+        // FROZEN (Phase 5I §10 decision 5): plain mean, no outlier pass. Phase 5H
+        // found mean / median / medoid / quality-weighted all within 0.01 AUC;
+        // mean is cheapest and most deterministic. The shot-aware tracker's
+        // appearance gate already rejects incompatible observations BEFORE they
+        // enter a tracklet, so there is nothing left for a second filter.
         val good = List(4) { member(floatArrayOf(1f, 0.02f * it, 0f), id = "g$it") }
-        val outlier = member(floatArrayOf(-1f, 0f, 0.1f), id = "bad") // opposite direction
+        val outlier = member(floatArrayOf(-1f, 0f, 0.1f), id = "bad")
         val agg = AppearanceEmbeddingAggregator().aggregate("app_1", 1L, good + outlier)!!
+        assertEquals("mean mode never rejects", 0, agg.rejectedOutliers)
+        assertEquals(5, agg.memberCount)
+        // 4 good vs 1 opposite ⇒ the mean still points with the majority
+        assertTrue("mean pulled to majority", agg.embedding.vector[0] > 0f)
+    }
+
+    @Test
+    fun frozenMeanMode_equalsPlainL2NormalizedCentroid() {
+        val members = listOf(
+            member(floatArrayOf(1f, 0f, 0f), id = "a"),
+            member(floatArrayOf(0f, 1f, 0f), id = "b"),
+        )
+        val agg = AppearanceEmbeddingAggregator().aggregate("app_1", 1L, members)!!
+        // mean of the two unit axes, re-normalized ⇒ (1/√2, 1/√2, 0)
+        val inv = 1f / sqrt(2f)
+        assertEquals(inv, agg.embedding.vector[0], 1e-5f)
+        assertEquals(inv, agg.embedding.vector[1], 1e-5f)
+        assertEquals(0f, agg.embedding.vector[2], 1e-5f)
+    }
+
+    @Test
+    fun legacyRobustMode_stillDropsASingleOutlier() {
+        // Not the frozen path — retained only for the diagnostic call sites that
+        // compare against Phase 3 behaviour.
+        val good = List(4) { member(floatArrayOf(1f, 0.02f * it, 0f), id = "g$it") }
+        val outlier = member(floatArrayOf(-1f, 0f, 0.1f), id = "bad")
+        val agg = AppearanceEmbeddingAggregator(
+            mode = AppearanceEmbeddingAggregator.Mode.ROBUST_MEAN,
+        ).aggregate("app_1", 1L, good + outlier)!!
         assertEquals("outlier should be rejected", 1, agg.rejectedOutliers)
         assertEquals(4, agg.memberCount)
-        // centroid should point with the good cluster (x ~ +1)
         assertTrue("centroid pulled to good cluster", agg.embedding.vector[0] > 0.9f)
     }
 

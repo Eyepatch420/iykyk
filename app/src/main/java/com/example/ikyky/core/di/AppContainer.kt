@@ -13,8 +13,10 @@ import com.example.ikyky.core.media.VideoFrameExtractor
 import com.example.ikyky.core.media.VideoMetadataReader
 import com.example.ikyky.core.ml.detector.FaceDetector
 import com.example.ikyky.core.ml.detector.MlKitFaceDetector
-import com.example.ikyky.core.ml.tracking.FaceTracker
-import com.example.ikyky.core.ml.tracking.GreedyFaceTracker
+import com.example.ikyky.core.ml.shots.DefaultShotScanner
+import com.example.ikyky.core.ml.shots.ShotScanner
+import com.example.ikyky.core.ml.tracking.ShotAwareFaceTracker
+import com.example.ikyky.features.processing.data.TrackerGateEmbedder
 import com.example.ikyky.core.ml.embedding.FaceEmbedder
 import com.example.ikyky.core.ml.embedding.LiteRtFaceEmbedder
 import com.example.ikyky.core.ml.model.EmbeddingModelLoader
@@ -77,8 +79,25 @@ class AppContainer(context: Context) {
     val faceEmbedder: FaceEmbedder by lazy { LiteRtFaceEmbedder(embeddingModelLoader, modelSpec) }
     val facePreprocessor: FacePreprocessor get() = DefaultFacePreprocessor()
 
-    /** Short-term tracker — a fresh instance is cheap; stateless config only. */
-    val faceTracker: FaceTracker get() = GreedyFaceTracker()
+    /**
+     * The FROZEN Phase 5I tracker (Config K / Option A): absolute whip-pan
+     * barriers + the embedding gate. A fresh instance is cheap — stateless
+     * config only.
+     *
+     * [GreedyFaceTracker] remains in the source tree for the Phase-2 tests and
+     * diagnostics that compare against it, but is no longer on the app's path.
+     */
+    val faceTracker: ShotAwareFaceTracker get() = ShotAwareFaceTracker()
+
+    /** Every-frame whip-pan / shot-change scan feeding the tracker's barriers. */
+    val shotScanner: ShotScanner get() = DefaultShotScanner()
+
+    /**
+     * Supplies the tracker's appearance-gate embeddings from the EXPANDED crop.
+     * Distinct from [facePreprocessor], which produces the 5-point RECOGNITION
+     * crop — the two must never be swapped (Phase 5I Option A vs B).
+     */
+    val trackerGateEmbedder: TrackerGateEmbedder by lazy { TrackerGateEmbedder(faceEmbedder) }
 
     // --- media ---
     val videoMetadataReader: VideoMetadataReader by lazy {
@@ -112,10 +131,12 @@ class AppContainer(context: Context) {
             metadataReader = videoMetadataReader,
             frameExtractor = videoFrameExtractor,
             faceDetector = faceDetector,
-            faceTracker = faceTracker,
             resultRepository = processingResultRepository,
             dispatchers = dispatchers,
             logger = logger,
+            shotScanner = shotScanner,
+            tracker = faceTracker,
+            gateEmbedder = trackerGateEmbedder,
         )
     }
     val generateAppearanceEmbeddingsUseCase: GenerateAppearanceEmbeddingsUseCase by lazy {

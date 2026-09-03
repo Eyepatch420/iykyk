@@ -319,8 +319,7 @@ class Sample1DebugSweepTest {
             metadataReader = MediaMetadataVideoReader(ctx, dispatchers),
             frameExtractor = MediaMetadataFrameExtractor(ctx, dispatchers),
             faceDetector = detector,
-            faceTracker = GreedyFaceTracker(),
-            resultRepository = resultRepo,
+                        resultRepository = resultRepo,
             dispatchers = dispatchers,
             logger = AndroidLogger(),
         )

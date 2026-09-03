@@ -14,7 +14,6 @@ import com.example.ikyky.core.ml.embedding.LiteRtFaceEmbedder
 import com.example.ikyky.core.ml.model.EmbeddingModelLoader
 import com.example.ikyky.core.ml.model.ModelSpec
 import com.example.ikyky.core.ml.preprocessing.DefaultFacePreprocessor
-import com.example.ikyky.core.ml.tracking.GreedyFaceTracker
 import com.example.ikyky.core.model.AppearanceEmbedding
 import com.example.ikyky.features.people.data.DefaultBuildIdentitiesUseCase
 import com.example.ikyky.features.people.domain.diagnostic.IdentityCalibrationDiagnostic
@@ -80,7 +79,7 @@ class IdentityCalibrationSweepTest {
         val extractor = MediaMetadataFrameExtractor(context, dispatchers)
         val phase2 = DefaultProcessVideoUseCase(
             metadataReader = metaReader, frameExtractor = extractor, faceDetector = detector,
-            faceTracker = GreedyFaceTracker(), resultRepository = repo, dispatchers = dispatchers, logger = logger,
+            resultRepository = repo, dispatchers = dispatchers, logger = logger,
         )
         assertTrue(phase2("s", uri) {} is AppResult.Success)
         detector.close()

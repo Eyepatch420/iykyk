@@ -51,6 +51,15 @@ class MediaMetadataVideoReader(
                     ?.toIntOrNull()
                     ?.let { ((it % 360) + 360) % 360 } ?: 0
 
+                // Capture frame rate. METADATA_KEY_CAPTURE_FRAMERATE is API 23+
+                // but is absent from many containers, so this stays optional —
+                // the shot scan falls back to a sane default rather than failing.
+                val frameRate = retriever
+                    .extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)
+                    ?.toFloatOrNull()
+                    ?.takeIf { it.isFinite() && it > 0f }
+                    ?: 0f
+
                 if (rawWidth <= 0 || rawHeight <= 0) {
                     return@withContext fail("Video dimensions are missing or invalid ($rawWidth x $rawHeight)")
                 }
@@ -65,6 +74,7 @@ class MediaMetadataVideoReader(
                         rawWidth = rawWidth,
                         rawHeight = rawHeight,
                         rotationDegrees = rotation,
+                        frameRate = frameRate,
                     )
                 )
             } catch (t: Throwable) {

@@ -30,6 +30,32 @@ data class ProcessingDiagnostics(
     val maxFacesInAnyFrame: Int = 0,
     val totalProcessingMs: Long = 0,
     val avgFrameProcessingMs: Double = 0.0,
+
+    // --- Phase 6: frozen-pipeline diagnostics -------------------------------
+
+    /** Frames the every-frame shot scan actually decoded and analysed. */
+    val shotScanFramesAnalysed: Int = 0,
+
+    /** Spike candidates found by the cheap cut score. */
+    val shotBoundaries: Int = 0,
+
+    /**
+     * Reconstructed whip-pan / hard-cut spans. Each is an ABSOLUTE tracking
+     * barrier. Phase 5F measured ~17 per 30 s sample clip.
+     */
+    val whipPanTransitions: Int = 0,
+
+    /** Wall-clock spent on the every-frame shot scan. */
+    val shotScanMs: Long = 0,
+
+    /** Gate-crop embeddings computed for the tracker's appearance gate. */
+    val trackerGateEmbeddings: Int = 0,
+
+    /** Wall-clock spent computing those gate embeddings. */
+    val trackerGateEmbeddingMs: Long = 0,
+
+    /** Wall-clock spent inside the shot-aware tracker itself. */
+    val trackingMs: Long = 0,
 ) {
     val framesRejectedAsInvalid: Int get() = framesSampled - framesDecodedOk
 

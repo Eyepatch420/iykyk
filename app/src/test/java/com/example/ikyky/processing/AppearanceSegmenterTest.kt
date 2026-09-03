@@ -37,9 +37,25 @@ class AppearanceSegmenterTest {
     }
 
     @Test
-    fun twoFrameShortDuration_isDropped() {
-        // frames 0..1 → 250 ms span, below MIN_APPEARANCE_DURATION_MS (300)
+    fun twoObservations_survive_regardlessOfDuration() {
+        // FROZEN (Phase 5I): the appearance gate is `>= 2 observations` ONLY —
+        // duration is never a filter (the Python reference uses
+        // min_duration_ms = 0). The old 300 ms rule was calibrated at 4 FPS;
+        // at the frozen 8 FPS two adjacent observations span just 125 ms, so
+        // keeping it would discard every genuine two-frame appearance.
         val seg = AppearanceSegmenter().segment(listOf(tracklet(1, 0..1)))
+        assertEquals(1, seg.size)
+        assertEquals(2, seg[0].observationCount)
+    }
+
+    @Test
+    fun oneObservationTracklet_isStillRejected() {
+        // The gate that DOES matter. A 1-observation tracklet is a single
+        // detection the tracker could not associate with anything — usually a
+        // blurred face at a shot edge. Phase 5G found these all embed to a
+        // similar "generic blurry face" vector and chain-merge into one 22-member
+        // blob if allowed through to clustering.
+        val seg = AppearanceSegmenter().segment(listOf(tracklet(1, 7..7)))
         assertTrue(seg.isEmpty())
     }
 

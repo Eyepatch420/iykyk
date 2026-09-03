@@ -14,6 +14,15 @@ data class VideoMetadata(
     val rawHeight: Int,
     /** 0 / 90 / 180 / 270 — how much the frame must be rotated to display upright. */
     val rotationDegrees: Int,
+    /**
+     * Capture frame rate, or 0f when the container does not report one.
+     *
+     * Used by the Phase 6 shot scan, which must decode at the video's NATIVE
+     * rate: a whip-pan in these clips lasts ~7 frames at 25 FPS, so a scan on the
+     * 8 FPS sampling grid would step straight over it. Also converts sampled
+     * frame indices into the scan's decoded-frame space for barrier queries.
+     */
+    val frameRate: Float = 0f,
 ) {
     /** Width once the video is displayed upright. */
     val displayWidth: Int get() = if (rotationDegrees % 180 == 90) rawHeight else rawWidth

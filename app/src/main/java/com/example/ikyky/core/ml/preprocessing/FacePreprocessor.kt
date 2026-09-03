@@ -26,8 +26,20 @@ interface FacePreprocessor {
     ): AppResult<PreprocessedFace>
 }
 
+/**
+ * @param aligner produces the **recognition** crop. FROZEN to
+ *   [ArcFaceFivePointAligner] by Phase 5I §9.2 — the canonical 5-point
+ *   similarity transform MobileFaceNet was trained against. The previous
+ *   [SimilarityTransformFaceAligner] (eye-line, 0.38 inter-ocular / 0.38 eye row)
+ *   is a *different* template and is the geometry Phase 5H identified as the
+ *   single largest source of cross-shot recognition error.
+ * @param presentationAligner produces the collage crop only. Still the eye-line
+ *   aligner, which owns [SimilarityTransformFaceAligner.presentationCrop]; it
+ *   must never feed the embedder.
+ */
 class DefaultFacePreprocessor(
-    private val aligner: SimilarityTransformFaceAligner = SimilarityTransformFaceAligner(),
+    private val aligner: FaceAligner = ArcFaceFivePointAligner(),
+    private val presentationAligner: SimilarityTransformFaceAligner = SimilarityTransformFaceAligner(),
 ) : FacePreprocessor {
 
     override fun preprocess(
@@ -39,7 +51,7 @@ class DefaultFacePreprocessor(
         val aligned = aligner.alignDetailed(frame, face, outputSize)
             ?: error("Face alignment failed")
         val presentation = if (includePresentationCrop) {
-            aligner.presentationCrop(frame, face, PipelineDefaults.PRESENTATION_CROP_MARGIN)
+            presentationAligner.presentationCrop(frame, face, PipelineDefaults.PRESENTATION_CROP_MARGIN)
         } else {
             null
         }

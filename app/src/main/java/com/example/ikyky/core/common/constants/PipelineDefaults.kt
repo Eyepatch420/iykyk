@@ -14,10 +14,14 @@ object PipelineDefaults {
     // ---------------------------------------------------------------------------
 
     /**
-     * Frames sampled per second of video. Initial default 4 FPS
-     * (≈120 timestamps for a 30 s clip). 2 / 4 / 5 FPS will be benchmarked later.
+     * Frames sampled per second of video.
+     *
+     * **FROZEN (Phase 5I §9.2).** Raised from the Phase-2 default of 4 FPS. The
+     * Phase 5F density sweep (4 / 8 / 12 / 25 FPS) showed 8 FPS is where tracklet
+     * continuity stops improving; higher rates only add cost. ≈240 timestamps for
+     * a 30 s clip.
      */
-    const val FRAME_SAMPLE_FPS: Float = 4f
+    const val FRAME_SAMPLE_FPS: Float = 8f
 
     /** Back-compat alias for [FRAME_SAMPLE_FPS] (kept so older call sites compile). */
     const val FRAME_SAMPLING_FPS: Float = FRAME_SAMPLE_FPS
@@ -120,8 +124,18 @@ object PipelineDefaults {
      */
     const val MIN_APPEARANCE_OBSERVATIONS: Int = 2
 
-    /** An appearance candidate must last at least this long. */
-    const val MIN_APPEARANCE_DURATION_MS: Long = 300L
+    /**
+     * An appearance candidate must last at least this long.
+     *
+     * **FROZEN to 0 (Phase 5I).** The Python reference's appearance gate is
+     * `min_obs >= 2` ONLY (`min_duration_ms = 0`); duration is never a filter.
+     * The old 300 ms value was calibrated at 4 FPS, where two observations span
+     * 250 ms; at the frozen 8 FPS two adjacent observations span just 125 ms, so
+     * keeping 300 ms would silently discard every genuine two-frame appearance
+     * and diverge from the validated pipeline. The observation-count gate below
+     * is what actually removes detector noise.
+     */
+    const val MIN_APPEARANCE_DURATION_MS: Long = 0L
 
     // ---------------------------------------------------------------------------
     // Lightweight quality signal (representative-frame scoring is a later phase)
@@ -142,9 +156,19 @@ object PipelineDefaults {
 
     /**
      * Cosine-similarity threshold above which two appearance embeddings are
-     * considered the same identity. Placeholder — calibrated in Phase 3/4.
+     * considered the same identity.
+     *
+     * **FROZEN at 0.475 (Phase 5I §9.2 / decision 6).** Selected by a rule fixed
+     * in advance — zero must-not-link violations, then maximum mean pair-F1 across
+     * all three samples, then stability, then the lower threshold — which never
+     * consults the expected person count. It sits mid-plateau: [0.450, 0.575]
+     * gives identical cluster membership on all three samples, so the exact value
+     * is not delicate.
+     *
+     * Do NOT retune this per video. Phase 5I validated one threshold for all
+     * samples; per-sample tuning was explicitly ruled out.
      */
-    const val IDENTITY_MERGE_COSINE_THRESHOLD: Float = 0.62f
+    const val IDENTITY_MERGE_COSINE_THRESHOLD: Float = 0.475f
 
     // ---------------------------------------------------------------------------
     // Crops
@@ -342,4 +366,98 @@ object PipelineDefaults {
      */
     const val WHIP_PAN_GAP_MS: Long = 700L
     const val WHIP_PAN_MAX_QUALITY: Float = 0.35f
+
+    // ===========================================================================
+    // Phase 6 — FROZEN Phase 5I configuration (Option A / "Config K")
+    // ===========================================================================
+    //
+    // Everything below is a PORT of the validated Python pipeline, not a tuning
+    // surface. Values come from PHASE_5I_REPORT.md §9.2. Changing any of them
+    // invalidates the Phase 5I validation.
+    //
+    // The two crops are deliberately distinct and must never be merged:
+    //   TRACKER  gate crop  -> expanded box (FACE_CROP_MARGIN_*), see
+    //                          TrackerAppearanceCrop
+    //   RECOGNITION crop    -> arcface_5pt similarity transform, see
+    //                          RecognitionFaceCrop / ArcFaceFivePointAligner
+    // ---------------------------------------------------------------------------
+
+    // -- shot / whip-pan detection (every decoded frame, no neural net) ---------
+
+    /** Grayscale thumbnail longest edge for the MAD / histogram / edge signals. */
+    const val SHOT_THUMB_EDGE_PX: Int = 64
+
+    /** Larger thumbnail edge used only for the variance-of-Laplacian sharpness. */
+    const val SHOT_SHARP_EDGE_PX: Int = 256
+
+    /** Per-channel HSV histogram bins (H, S and V each get this many). */
+    const val SHOT_HIST_BINS: Int = 32
+
+    /** Equal weights: the three cheap signals contribute identically. */
+    const val SHOT_W_MAD: Double = 1.0
+    const val SHOT_W_HIST: Double = 1.0
+    const val SHOT_W_EDGE: Double = 1.0
+
+    /**
+     * A candidate boundary must exceed `mean + z*std` of the whole score series
+     * AND the absolute floor. The score is normalised so each raw signal's 99th
+     * percentile is ~1.0: genuine cuts land 0.8–1.2, handheld motion stays below
+     * ~0.45, so the histogram is cleanly bimodal and these are not delicate.
+     */
+    const val SHOT_Z_THRESHOLD: Double = 2.5
+    const val SHOT_ABS_FLOOR: Double = 0.55
+
+    /** A candidate must be a local maximum within ± this many frames. */
+    const val SHOT_NMS_RADIUS: Int = 3
+
+    /** Ignore candidates this close to the first / last frame (decode warm-up). */
+    const val SHOT_EDGE_GUARD: Int = 2
+
+    /**
+     * Two spikes closer than this are the blur-in / blur-out bracket of ONE
+     * whip-pan and are fused into a single transition span.
+     */
+    const val SHOT_PAIR_MAX_GAP_FRAMES: Int = 14
+
+    /** A lone spike is a hard cut; pad it by this many frames on each side. */
+    const val SHOT_HARD_CUT_PAD_FRAMES: Int = 1
+
+    /**
+     * A frame belongs to a transition when its sharpness falls below this
+     * fraction of the video's median sharpness. Spans are widened across the
+     * blurred run so the whole unusable stretch becomes a barrier.
+     */
+    const val SHOT_BLUR_RATIO: Double = 0.45
+
+    // -- shot-aware tracking (replaces the Phase-2 greedy geometry gates) -------
+
+    /**
+     * Maximum wall-clock gap between consecutive observations of one track.
+     * At the frozen 8 FPS one missed frame is 125 ms, so 400 ms tolerates three.
+     */
+    const val SHOT_AWARE_MAX_GAP_MS: Long = 400L
+
+    /** Geometry gate: minimum IoU between the track's last box and a candidate. */
+    const val SHOT_AWARE_MIN_IOU: Float = 0.20f
+
+    /** Geometry gate: centre distance as a fraction of the FRAME DIAGONAL. */
+    const val SHOT_AWARE_MAX_CENTER_DIST_FRACTION: Float = 0.18f
+
+    /** Geometry gate: box-AREA ratio must stay within [1/x, x]. */
+    const val SHOT_AWARE_MAX_SIZE_RATIO: Float = 2.2f
+
+    /**
+     * Embedding gate: reject an association whose cosine to the track's
+     * representation is below this. The decision is made BEFORE the track's
+     * appearance state is updated (anti-contamination — a rejected observation
+     * must never move the representation).
+     */
+    const val SHOT_AWARE_APPEARANCE_MIN_COS: Float = 0.50f
+
+    /** How many recently-ACCEPTED embeddings the representation is drawn from. */
+    const val SHOT_AWARE_APPEARANCE_HISTORY: Int = 5
+
+    /** Candidate scoring weights when several tracks compete for one detection. */
+    const val SHOT_AWARE_W_IOU: Float = 1.0f
+    const val SHOT_AWARE_W_APPEARANCE: Float = 0.5f
 }
