@@ -112,11 +112,17 @@ class DefaultProcessVideoUseCase(
         val obsIdSeq = AtomicLong(0)
 
         // --- 1. metadata -----------------------------------------------------
+        logger.i(TAG, "PROCESS_START session=$sessionId")
         onProgress(ProcessingProgress(ProcessingStage.LOADING_VIDEO, 0f))
         val metadata = when (val r = metadataReader.read(uriString)) {
             is AppResult.Success -> r.value
             is AppResult.Failure -> return@withContext AppResult.Failure(r.error)
         }
+        logger.i(
+            TAG,
+            "METADATA ${metadata.displayWidth}x${metadata.displayHeight} " +
+                "${metadata.durationMs}ms fps=${metadata.frameRate} rot=${metadata.rotationDegrees}",
+        )
 
         val request = FrameSamplingRequest(uriString = uriString, metadata = metadata, fps = fps)
         val framesPlanned = frameExtractor.plannedFrameCount(request)
@@ -140,13 +146,30 @@ class DefaultProcessVideoUseCase(
         onProgress(
             ProcessingProgress(
                 ProcessingStage.EXTRACTING_FRAMES,
-                0f,
-                detail = "scanning for shot changes",
+                ProgressModel.shotScanFraction(0, 1),
+                detail = "Scanning for shot changes…",
                 diagnostics = diag,
             )
         )
         val shotScanStart = System.currentTimeMillis()
-        val shotScan = scanShots(uriString, metadata)
+        var lastScanEmitMs = 0L
+        val shotScan = scanShots(uriString, metadata) { done, planned ->
+            // Throttle to ~4 Hz so the UI updates smoothly without flooding the
+            // main thread; the 0/240 sampled-frame counter is NOT shown here.
+            val now = System.currentTimeMillis()
+            if (now - lastScanEmitMs >= 250L || done == planned) {
+                lastScanEmitMs = now
+                diag = diag.copy(shotScanFramesAnalysed = done)
+                onProgress(
+                    ProcessingProgress(
+                        ProcessingStage.EXTRACTING_FRAMES,
+                        ProgressModel.shotScanFraction(done, planned),
+                        detail = "Scanning for shot changes… $done / $planned",
+                        diagnostics = diag,
+                    )
+                )
+            }
+        }
         diag = diag.copy(
             shotScanFramesAnalysed = shotScan.frameCount,
             shotBoundaries = shotScan.boundaries.size,
@@ -235,6 +258,12 @@ class DefaultProcessVideoUseCase(
             )
         }
 
+        logger.i(
+            TAG,
+            "SAMPLING_PASS_END frames=${diag.framesDecodedOk} obs=${diag.totalFaceObservations} " +
+                "gateEmb=${diag.trackerGateEmbeddings}",
+        )
+
         // --- 4. shot-aware tracking -----------------------------------------
         currentCoroutineContext().ensureActive()
         onProgress(
@@ -244,6 +273,7 @@ class DefaultProcessVideoUseCase(
                 diagnostics = diag,
             )
         )
+        logger.i(TAG, "TRACKING_START observations=${allObservations.size}")
         val trackStart = System.currentTimeMillis()
         val frameDiagonal = hypot(
             metadata.displayWidth.toFloat(),
@@ -260,6 +290,7 @@ class DefaultProcessVideoUseCase(
             gateEmbeddings = gateEmbeddings,
         )
         diag = diag.copy(trackingMs = System.currentTimeMillis() - trackStart)
+        logger.i(TAG, "TRACKING_END rawTracklets=${tracklets.size}")
 
         // --- 4. appearance segmentation ----------------------------------
         onProgress(
@@ -306,7 +337,11 @@ class DefaultProcessVideoUseCase(
      * scan simply means no barriers, and the tracker degrades to geometry +
      * temporal gating rather than crashing the pipeline.
      */
-    private suspend fun scanShots(uriString: String, metadata: VideoMetadata): ShotScan =
+    private suspend fun scanShots(
+        uriString: String,
+        metadata: VideoMetadata,
+        onScanProgress: (done: Int, planned: Int) -> Unit,
+    ): ShotScan =
         try {
             val nativeFps = metadata.frameRate.takeIf { it > 0f }?.toDouble() ?: DEFAULT_SCAN_FPS
             val scanRequest = FrameSamplingRequest(
@@ -319,7 +354,9 @@ class DefaultProcessVideoUseCase(
                 maxEdgePx = SHOT_SCAN_DECODE_EDGE_PX,
             )
             val planned = frameExtractor.plannedFrameCount(scanRequest)
+            logger.i(TAG, "SHOT_SCAN_START planned=$planned @ ${"%.2f".format(nativeFps)} fps")
             val session = shotScanner.newSession(planned, nativeFps)
+            var done = 0
             frameExtractor.extractFrames(scanRequest).collect { f ->
                 currentCoroutineContext().ensureActive()
                 try {
@@ -327,12 +364,24 @@ class DefaultProcessVideoUseCase(
                 } finally {
                     f.bitmap.recycleQuietly()
                 }
+                done++
+                // Report every frame to the caller (which throttles), and drop a
+                // durable log line every ~50 frames so a crash leaves a trail
+                // showing exactly which frame the scan reached.
+                onScanProgress(done, planned)
+                if (done % 50 == 0) logger.i(TAG, "SHOT_SCAN_FRAME $done/$planned")
             }
-            session.finish()
+            val scan = session.finish()
+            logger.i(
+                TAG,
+                "SHOT_SCAN_END frames=${scan.frameCount} " +
+                    "spikes=${scan.boundaries.size} transitions=${scan.transitions.size}",
+            )
+            scan
         } catch (ce: CancellationException) {
             throw ce
         } catch (t: Throwable) {
-            logger.w(TAG, "shot scan failed; continuing without barriers: ${t.message}")
+            logger.w(TAG, "shot scan failed; continuing without barriers: ${t.message}", t)
             ShotScan.EMPTY
         }
 

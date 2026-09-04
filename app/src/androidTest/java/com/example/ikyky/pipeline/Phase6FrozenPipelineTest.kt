@@ -60,6 +60,47 @@ class Phase6FrozenPipelineTest {
     private fun log(line: String) {
         Log.i(TAG, line)
         println("$TAG $line")
+        stageTrail(line)
+    }
+
+    /**
+     * Crash-surviving trail. Every line is appended-and-flushed to a file under
+     * `additionalTestOutputDir` (AGP pulls that off-device even after a crashed
+     * instrumentation run), so the LAST line written is always the last thing the
+     * process did before it died — which stage, which sample, which frame.
+     */
+    private fun stageTrail(line: String) {
+        try {
+            val f = File(trailDir(), "phase6_stage_trail.log")
+            java.io.FileOutputStream(f, /* append = */ true).use { os ->
+                os.write("${System.currentTimeMillis()}  $line\n".toByteArray())
+                os.flush()
+                os.fd.sync()   // force to storage — survive a native abort
+            }
+        } catch (_: Throwable) {
+            // never let diagnostics crash the run
+        }
+    }
+
+    /** A stage marker with memory, written even when nothing else is logged. */
+    private fun stage(name: String, extra: String = "") {
+        val rt = Runtime.getRuntime()
+        val used = (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024)
+        val info = android.os.Debug.MemoryInfo()
+        android.os.Debug.getMemoryInfo(info)
+        stageTrail(
+            "STAGE $name  javaHeap=${used}MB pss=${info.totalPss / 1024}MB " +
+                "native=${info.nativePss / 1024}MB" + (if (extra.isNotEmpty()) "  $extra" else "")
+        )
+    }
+
+    private fun trailDir(): File {
+        val dir = File(
+            context.getExternalFilesDir(null) ?: context.filesDir,
+            "phase6_trail",
+        )
+        dir.mkdirs()
+        return dir
     }
 
     /** Device identification — recorded verbatim in the Phase 6 validation report. */
@@ -112,8 +153,24 @@ class Phase6FrozenPipelineTest {
         log("=".repeat(78))
         log("  crops are written to: ${cropDir().absolutePath}")
 
-        for (sample in listOf("sample_1", "sample_2", "sample_3")) {
-            runOne(sample)
+        // Phase 6.1: ONE ML Kit detector and ONE TFLite embedder for the whole
+        // run. FaceDetection.getClient() leaks ~45 MB of native memory PER
+        // INSTANCE that FaceDetector.close() does not reclaim on this ML Kit
+        // version — creating a detector per sample grew allocated native memory
+        // ~45 MB per sample (proven: one shared detector across all three
+        // samples => 0 MB drift). The production app is unaffected because
+        // AppContainer.faceDetector is a `by lazy` singleton; this test now
+        // mirrors that ownership model.
+        val detector = MlKitFaceDetector()
+        val modelLoader = EmbeddingModelLoader(context, ModelSpec.MOBILE_FACE_NET)
+        val embedder = LiteRtFaceEmbedder(modelLoader, ModelSpec.MOBILE_FACE_NET)
+        try {
+            for (sample in listOf("sample_1", "sample_2", "sample_3")) {
+                runOne(sample, detector, embedder, modelLoader)
+            }
+        } finally {
+            runCatching { detector.close() }
+            runCatching { embedder.close() }
         }
     }
 
@@ -197,17 +254,28 @@ class Phase6FrozenPipelineTest {
         log("  representative crops written : $written -> ${dir.absolutePath}")
     }
 
-    private suspend fun runOne(sample: String) {
+    /**
+     * @param detector / [embedder] / [modelLoader] are created ONCE by the test
+     * method and shared across all three samples. `FaceDetection.getClient()`
+     * leaks ~45 MB of native memory per instance that `close()` does not reclaim
+     * on this ML Kit version, and a fresh `LiteRtFaceEmbedder` per sample used to
+     * leak its interpreter + model mmap; sharing one of each eliminates both.
+     */
+    private suspend fun runOne(
+        sample: String,
+        detector: MlKitFaceDetector,
+        embedder: LiteRtFaceEmbedder,
+        modelLoader: EmbeddingModelLoader,
+    ) {
         val file = copyAssetToCache("$sample.mp4")
         val uri = android.net.Uri.fromFile(file).toString()
 
         val dispatchers = StandardDispatcherProvider()
         val logger = AndroidLogger()
-        val detector = MlKitFaceDetector()
         val repo = InMemoryProcessingResultRepository()
-        val modelLoader = EmbeddingModelLoader(context, ModelSpec.MOBILE_FACE_NET)
-        val embedder = LiteRtFaceEmbedder(modelLoader, ModelSpec.MOBILE_FACE_NET)
 
+        stage("PROCESS_START", "sample=$sample")
+        logMemory("$sample:start")
         val wallStart = System.currentTimeMillis()
 
         // ---- Phase 6B/6C/6D: sample -> detect -> gate-embed -> shot-aware track
@@ -220,12 +288,14 @@ class Phase6FrozenPipelineTest {
             logger = logger,
             gateEmbedder = TrackerGateEmbedder(embedder),
         )
+        stage("SAMPLING_PASS_START", "sample=$sample")
         val outcome = process(sample, uri) {}
+        stage("SAMPLING_PASS_END", "sample=$sample outcome=${outcome::class.simpleName}")
         assertTrue("$sample: processing must succeed", outcome is AppResult.Success)
-        detector.close()
 
         val diag = repo.getDiagnostics(sample)!!
         val appearances = repo.getCandidates(sample)
+        stage("TRACKING_DONE", "appearances=${appearances.size} rawTracklets=${diag.rawTracklets}")
 
         // ---- Phase 6E/6F/6G: 5-point crop -> MobileFaceNet -> mean aggregation
         val embedStart = System.currentTimeMillis()
@@ -239,12 +309,15 @@ class Phase6FrozenPipelineTest {
         )
         val metadata = (MediaMetadataVideoReader(context, dispatchers).read(uri)
             as AppResult.Success).value
+        stage("EMBEDDING_START", "appearances=${appearances.size}")
         val embedResult = embedUseCase(uri, metadata, appearances) { _, _ -> }
+        stage("EMBEDDING_END")
         assertTrue("$sample: embedding must succeed", embedResult is AppResult.Success)
         val embeddings = (embedResult as AppResult.Success).value
         val embedMs = System.currentTimeMillis() - embedStart
 
         // ---- Phase 6H/6I: must-not-link -> agglomerative clustering
+        stage("CLUSTERING_START")
         val clusterStart = System.currentTimeMillis()
         val mnl = MustNotLinkBuilder().build(appearances)
         val clusters = AgglomerativeIdentityClusterer().cluster(
@@ -318,6 +391,8 @@ class Phase6FrozenPipelineTest {
                 "max=${"%.6f".format(norms.max())}")
         }
         logMemory(sample)
+
+        stage("SAMPLE_COMPLETE", "sample=$sample people=${clusters.clusters.size}")
 
         // ---- visual inspection material --------------------------------------
         exportRepresentativeCrops(
