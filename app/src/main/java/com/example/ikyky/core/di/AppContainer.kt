@@ -34,6 +34,7 @@ import com.example.ikyky.features.collage.domain.engine.LayoutEngine
 import com.example.ikyky.features.collage.domain.repository.CollageResultRepository
 import com.example.ikyky.features.collage.domain.usecase.GenerateCollageUseCase
 import com.example.ikyky.features.people.data.DefaultBuildIdentitiesUseCase
+import com.example.ikyky.features.people.data.FrozenBuildIdentitiesUseCase
 import com.example.ikyky.features.people.data.repository.InMemoryPeopleResultRepository
 import com.example.ikyky.features.people.domain.repository.PeopleResultRepository
 import com.example.ikyky.features.people.domain.usecase.BuildIdentitiesUseCase
@@ -149,8 +150,24 @@ class AppContainer(context: Context) {
             logger = logger,
         )
     }
+    /**
+     * **Production identity clustering — the FROZEN Phase 5I / Phase 6 path.**
+     *
+     * [FrozenBuildIdentitiesUseCase] wraps the already-frozen
+     * [AgglomerativeIdentityClusterer] at
+     * [com.example.ikyky.core.common.constants.PipelineDefaults.IDENTITY_MERGE_COSINE_THRESHOLD]
+     * (0.475) with [MustNotLinkBuilder] as hard constraints, and nothing else —
+     * no intra-appearance split, no dense re-embedding, no unsupervised
+     * threshold calibration.
+     *
+     * [DefaultBuildIdentitiesUseCase] (the old calibrator-based path, which
+     * falls back to a 0.62 threshold on low calibration confidence) is NOT
+     * wired here and must not be reachable from real processing. It remains in
+     * the source tree only for the Phase 4/4.5 diagnostic screens and their
+     * existing tests, which study what calibration/splitting would do.
+     */
     val buildIdentitiesUseCase: BuildIdentitiesUseCase by lazy {
-        DefaultBuildIdentitiesUseCase(dispatchers = dispatchers, logger = logger)
+        FrozenBuildIdentitiesUseCase(dispatchers = dispatchers, logger = logger)
     }
     val generateCollageUseCase: GenerateCollageUseCase by lazy { GenerateCollagePhase1Stub() }
     val saveCollageUseCase: SaveCollageUseCase get() = SaveCollageUseCase(collageStorage)
