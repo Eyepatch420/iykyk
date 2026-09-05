@@ -23,8 +23,11 @@ import com.example.ikyky.core.ml.model.EmbeddingModelLoader
 import com.example.ikyky.core.ml.model.ModelSpec
 import com.example.ikyky.core.ml.preprocessing.DefaultFacePreprocessor
 import com.example.ikyky.core.ml.preprocessing.FacePreprocessor
+import com.example.ikyky.core.ml.preprocessing.SimilarityTransformFaceAligner
 import com.example.ikyky.core.storage.CollageStorage
+import com.example.ikyky.core.storage.RepresentativeImageStorage
 import com.example.ikyky.core.storage.ShareManager
+import com.example.ikyky.core.storage.impl.CacheRepresentativeImageStorage
 import com.example.ikyky.core.storage.impl.IntentShareManager
 import com.example.ikyky.core.storage.impl.MediaStoreCollageStorage
 import com.example.ikyky.features.collage.data.GenerateCollagePhase1Stub
@@ -38,6 +41,9 @@ import com.example.ikyky.features.people.data.FrozenBuildIdentitiesUseCase
 import com.example.ikyky.features.people.data.repository.InMemoryPeopleResultRepository
 import com.example.ikyky.features.people.domain.repository.PeopleResultRepository
 import com.example.ikyky.features.people.domain.usecase.BuildIdentitiesUseCase
+import com.example.ikyky.features.people.domain.usecase.PersonAppearancesUseCase
+import com.example.ikyky.features.people.domain.usecase.SelectRepresentativeImagesUseCase
+import com.example.ikyky.features.processing.domain.model.AppearanceCandidate
 import com.example.ikyky.features.processing.data.DefaultGenerateAppearanceEmbeddingsUseCase
 import com.example.ikyky.features.processing.data.DefaultProcessVideoUseCase
 import com.example.ikyky.features.processing.data.repository.InMemoryProcessingResultRepository
@@ -122,6 +128,16 @@ class AppContainer(context: Context) {
     val collageStorage: CollageStorage by lazy { MediaStoreCollageStorage(appContext, dispatchers) }
     val shareManager: ShareManager by lazy { IntentShareManager(appContext) }
 
+    /**
+     * App-private storage for per-person representative crops. Deliberately
+     * NOT [collageStorage] — that writes to the public MediaStore gallery,
+     * correct for the one collage a user explicitly saves, wrong for the
+     * 5-10 incidental face crops produced just by viewing the People screen.
+     */
+    val representativeImageStorage: RepresentativeImageStorage by lazy {
+        CacheRepresentativeImageStorage(appContext, dispatchers)
+    }
+
     // --- feature repositories ---
     val videoRepository: VideoRepository by lazy { MediaVideoRepository(appContext, dispatchers) }
 
@@ -169,6 +185,26 @@ class AppContainer(context: Context) {
     val buildIdentitiesUseCase: BuildIdentitiesUseCase by lazy {
         FrozenBuildIdentitiesUseCase(dispatchers = dispatchers, logger = logger)
     }
+
+    /**
+     * Phase 7 — picks each [com.example.ikyky.features.people.domain.model.Person]'s
+     * representative crop (highest-[com.example.ikyky.features.processing.domain.model.AppearanceCandidate.bestQuality]
+     * appearance's already-recorded best frame) and persists it via
+     * [representativeImageStorage]. A pure presentation step; never touches
+     * clustering or the frozen recognition path.
+     */
+    val selectRepresentativeImagesUseCase: SelectRepresentativeImagesUseCase by lazy {
+        SelectRepresentativeImagesUseCase(
+            frameExtractor = videoFrameExtractor,
+            aligner = SimilarityTransformFaceAligner(),
+            storage = representativeImageStorage,
+            logger = logger,
+        )
+    }
+
+    /** Joins a [Person]'s appearance ids back against the session's [AppearanceCandidate]s. */
+    val personAppearancesUseCase: PersonAppearancesUseCase by lazy { PersonAppearancesUseCase() }
+
     val generateCollageUseCase: GenerateCollageUseCase by lazy { GenerateCollagePhase1Stub() }
     val saveCollageUseCase: SaveCollageUseCase get() = SaveCollageUseCase(collageStorage)
     val shareCollageUseCase: ShareCollageUseCase get() = ShareCollageUseCase(collageStorage, shareManager)

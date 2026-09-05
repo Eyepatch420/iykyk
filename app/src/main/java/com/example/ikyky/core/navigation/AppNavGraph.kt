@@ -8,6 +8,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.ikyky.features.collage.presentation.screen.CollageScreen
 import com.example.ikyky.features.people.presentation.screen.PeopleScreen
+import com.example.ikyky.features.people.presentation.screen.PersonDetailScreen
 import com.example.ikyky.features.processing.presentation.screen.ProcessingScreen
 import com.example.ikyky.features.result.presentation.screen.ResultScreen
 import com.example.ikyky.features.video_selection.presentation.screen.VideoSelectionScreen
@@ -64,7 +65,26 @@ fun AppNavGraph(
 
         composable("${AppDestinations.PEOPLE}?session={session}") { backStackEntry ->
             val session = backStackEntry.arguments?.getString("session") ?: "default"
-            PeopleScreen(sessionId = session)
+            PeopleScreen(
+                sessionId = session,
+                onOpenPerson = { personId ->
+                    navController.navigate(
+                        "${AppDestinations.PERSON_DETAIL}?session=$session&personId=$personId"
+                    )
+                },
+            )
+        }
+
+        composable(
+            "${AppDestinations.PERSON_DETAIL}?session={session}&personId={personId}"
+        ) { backStackEntry ->
+            val session = backStackEntry.arguments?.getString("session") ?: "default"
+            val personId = backStackEntry.arguments?.getString("personId") ?: ""
+            PersonDetailScreen(
+                sessionId = session,
+                personId = personId,
+                onBack = { navController.popBackStack() },
+            )
         }
 
         composable("${AppDestinations.COLLAGE}?session={session}") { backStackEntry ->

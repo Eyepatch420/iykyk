@@ -6,6 +6,7 @@ import com.example.ikyky.core.common.result.AppResult
 import com.example.ikyky.core.media.VideoMetadataReader
 import com.example.ikyky.features.people.domain.repository.PeopleResultRepository
 import com.example.ikyky.features.people.domain.usecase.BuildIdentitiesUseCase
+import com.example.ikyky.features.people.domain.usecase.SelectRepresentativeImagesUseCase
 import com.example.ikyky.features.people.presentation.state.PeopleUiState
 import com.example.ikyky.features.processing.domain.repository.ProcessingResultRepository
 import com.example.ikyky.features.processing.domain.usecase.GenerateAppearanceEmbeddingsUseCase
@@ -20,9 +21,11 @@ import kotlinx.coroutines.launch
  *
  * Phase 2 (appearance candidates) is already in [processingRepository]. On
  * [load] this runs **Phase 3** (appearance → embeddings) then **Phase 4**
- * (embedding-assisted split → calibration → must-not-link → clustering →
- * `Person[]`), stores the result and mirrors it into immutable UI state. If
- * people were already built for this session, it just reads them back.
+ * (must-not-link → clustering → `Person[]`), then **Phase 7** (representative
+ * image selection — one crop per person, persisted via
+ * [SelectRepresentativeImagesUseCase]), stores the result and mirrors it into
+ * immutable UI state. If people were already built for this session, it just
+ * reads them back.
  *
  * No ML / clustering logic here — only orchestration + state.
  */
@@ -32,6 +35,7 @@ class PeopleViewModel(
     private val metadataReader: VideoMetadataReader,
     private val generateEmbeddings: GenerateAppearanceEmbeddingsUseCase,
     private val buildIdentities: BuildIdentitiesUseCase,
+    private val selectRepresentativeImages: SelectRepresentativeImagesUseCase,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(PeopleUiState())
@@ -88,11 +92,22 @@ class PeopleViewModel(
                 )
             ) {
                 is AppResult.Success -> {
-                    peopleRepository.setPeople(sessionId, r.value.people, r.value.diagnostics)
+                    // Phase 7 — one representative crop per person. A pure
+                    // presentation step: it can only fill in
+                    // Person.representativeFrame or leave it null on failure,
+                    // never change WHO is in which cluster.
+                    val withImages = selectRepresentativeImages.select(
+                        sessionId = sessionId,
+                        uriString = uri,
+                        metadata = metadata,
+                        people = r.value.people,
+                        candidates = appearances,
+                    )
+                    peopleRepository.setPeople(sessionId, withImages, r.value.diagnostics)
                     _uiState.update {
                         it.copy(
                             loading = false,
-                            people = r.value.people,
+                            people = withImages,
                             diagnostics = r.value.diagnostics,
                         )
                     }

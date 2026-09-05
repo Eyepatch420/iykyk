@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.example.ikyky.features.collage.presentation.viewmodel.CollageViewModel
 import com.example.ikyky.features.people.presentation.viewmodel.PeopleViewModel
+import com.example.ikyky.features.people.presentation.viewmodel.PersonDetailViewModel
 import com.example.ikyky.features.processing.presentation.viewmodel.ProcessingViewModel
 import com.example.ikyky.features.result.presentation.viewmodel.ResultViewModel
 import com.example.ikyky.features.video_selection.presentation.viewmodel.VideoSelectionViewModel
@@ -41,6 +42,14 @@ class AppViewModelFactory(
                 metadataReader = container.videoMetadataReader,
                 generateEmbeddings = container.generateAppearanceEmbeddingsUseCase,
                 buildIdentities = container.buildIdentitiesUseCase,
+                selectRepresentativeImages = container.selectRepresentativeImagesUseCase,
+            ) as T
+
+        modelClass.isAssignableFrom(PersonDetailViewModel::class.java) ->
+            PersonDetailViewModel(
+                peopleRepository = container.peopleResultRepository,
+                processingRepository = container.processingResultRepository,
+                personAppearances = container.personAppearancesUseCase,
             ) as T
 
         modelClass.isAssignableFrom(CollageViewModel::class.java) ->
