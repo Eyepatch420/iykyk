@@ -22,6 +22,8 @@ class GridLayoutEngine constructor() : LayoutEngine {
 
     override fun supportedStyles(): Set<LayoutStyle> = setOf(LayoutStyle.GRID)
 
+    override val supportedPeopleRange: IntRange = 1..40
+
     override fun buildTemplate(config: LayoutConfiguration): AppResult<LayoutTemplate> =
         runCatchingResult {
             val n = config.personCount.coerceAtLeast(1)

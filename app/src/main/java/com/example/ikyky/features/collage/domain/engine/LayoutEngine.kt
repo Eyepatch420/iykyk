@@ -18,6 +18,14 @@ interface LayoutEngine {
 
     /** Styles this engine can currently produce. */
     fun supportedStyles(): Set<LayoutStyle>
+
+    /**
+     * The people counts this engine is a sensible choice for. A registry uses
+     * this to decide which engines to offer for a given count — the engine
+     * itself never sees "if count == N" branching to decide its own slots,
+     * this range only gates WHETHER it's asked at all.
+     */
+    val supportedPeopleRange: IntRange
 }
 
 /**

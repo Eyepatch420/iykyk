@@ -54,9 +54,11 @@ class AppViewModelFactory(
 
         modelClass.isAssignableFrom(CollageViewModel::class.java) ->
             CollageViewModel(
-                container.generateCollageUseCase,
-                container.collageResultRepository,
-                container.dispatchers,
+                peopleRepository = container.peopleResultRepository,
+                getTemplates = container.getCollageTemplatesUseCase,
+                generateCollage = container.generateCollageUseCase,
+                collageRepository = container.collageResultRepository,
+                dispatchers = container.dispatchers,
             ) as T
 
         modelClass.isAssignableFrom(ResultViewModel::class.java) ->

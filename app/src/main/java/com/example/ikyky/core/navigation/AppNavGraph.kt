@@ -72,6 +72,9 @@ fun AppNavGraph(
                         "${AppDestinations.PERSON_DETAIL}?session=$session&personId=$personId"
                     )
                 },
+                onMakeCollage = {
+                    navController.navigate("${AppDestinations.COLLAGE}?session=$session")
+                },
             )
         }
 

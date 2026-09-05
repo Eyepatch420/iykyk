@@ -30,12 +30,25 @@ import com.example.ikyky.core.storage.ShareManager
 import com.example.ikyky.core.storage.impl.CacheRepresentativeImageStorage
 import com.example.ikyky.core.storage.impl.IntentShareManager
 import com.example.ikyky.core.storage.impl.MediaStoreCollageStorage
-import com.example.ikyky.features.collage.data.GenerateCollagePhase1Stub
+import com.example.ikyky.features.collage.data.DefaultGenerateCollageUseCase
+import com.example.ikyky.features.collage.data.render.CanvasCollageRenderer
 import com.example.ikyky.features.collage.data.repository.InMemoryCollageResultRepository
+import com.example.ikyky.features.collage.domain.engine.AsymmetricLayoutEngine
+import com.example.ikyky.features.collage.domain.engine.CollageTemplateRegistry
 import com.example.ikyky.features.collage.domain.engine.GridLayoutEngine
+import com.example.ikyky.features.collage.domain.engine.HeroLayoutEngine
 import com.example.ikyky.features.collage.domain.engine.LayoutEngine
+import com.example.ikyky.features.collage.domain.engine.MasonryLayoutEngine
+import com.example.ikyky.features.collage.domain.engine.MixedSizeLayoutEngine
+import com.example.ikyky.features.collage.domain.engine.OverlapLayoutEngine
+import com.example.ikyky.features.collage.domain.engine.ScrapbookLayoutEngine
+import com.example.ikyky.features.collage.domain.engine.StaggeredLayoutEngine
+import com.example.ikyky.features.collage.domain.render.CollageRenderer
 import com.example.ikyky.features.collage.domain.repository.CollageResultRepository
+import com.example.ikyky.features.collage.domain.usecase.ChooseCollageImagesUseCase
+import com.example.ikyky.features.collage.domain.usecase.DefaultChooseCollageImagesUseCase
 import com.example.ikyky.features.collage.domain.usecase.GenerateCollageUseCase
+import com.example.ikyky.features.collage.domain.usecase.GetCollageTemplatesUseCase
 import com.example.ikyky.features.people.data.DefaultBuildIdentitiesUseCase
 import com.example.ikyky.features.people.data.FrozenBuildIdentitiesUseCase
 import com.example.ikyky.features.people.data.repository.InMemoryPeopleResultRepository
@@ -122,7 +135,29 @@ class AppContainer(context: Context) {
     val collageResultRepository: CollageResultRepository by lazy { InMemoryCollageResultRepository() }
 
     // --- collage engine ---
-    val layoutEngine: LayoutEngine by lazy { GridLayoutEngine() }
+    /**
+     * Phase 8 — every visual style the app can produce, purely as data. Adding
+     * a style is adding one more [LayoutEngine] here; nothing else (registry,
+     * use case, renderer, ViewModel) branches on style or people count.
+     */
+    val collageEngines: List<LayoutEngine> by lazy {
+        listOf(
+            GridLayoutEngine(),
+            HeroLayoutEngine(),
+            AsymmetricLayoutEngine(),
+            StaggeredLayoutEngine(),
+            MasonryLayoutEngine(),
+            OverlapLayoutEngine(),
+            ScrapbookLayoutEngine(),
+            MixedSizeLayoutEngine(),
+        )
+    }
+    val collageTemplateRegistry: CollageTemplateRegistry by lazy { CollageTemplateRegistry(collageEngines) }
+    val collageRenderer: CollageRenderer by lazy { CanvasCollageRenderer(dispatchers) }
+    val chooseCollageImagesUseCase: ChooseCollageImagesUseCase by lazy { DefaultChooseCollageImagesUseCase() }
+    val getCollageTemplatesUseCase: GetCollageTemplatesUseCase by lazy {
+        GetCollageTemplatesUseCase(collageTemplateRegistry)
+    }
 
     // --- storage / share ---
     val collageStorage: CollageStorage by lazy { MediaStoreCollageStorage(appContext, dispatchers) }
@@ -205,7 +240,17 @@ class AppContainer(context: Context) {
     /** Joins a [Person]'s appearance ids back against the session's [AppearanceCandidate]s. */
     val personAppearancesUseCase: PersonAppearancesUseCase by lazy { PersonAppearancesUseCase() }
 
-    val generateCollageUseCase: GenerateCollageUseCase by lazy { GenerateCollagePhase1Stub() }
+    val generateCollageUseCase: GenerateCollageUseCase by lazy {
+        DefaultGenerateCollageUseCase(
+            context = appContext,
+            peopleRepository = peopleResultRepository,
+            chooseImages = chooseCollageImagesUseCase,
+            registry = collageTemplateRegistry,
+            renderer = collageRenderer,
+            dispatchers = dispatchers,
+            logger = logger,
+        )
+    }
     val saveCollageUseCase: SaveCollageUseCase get() = SaveCollageUseCase(collageStorage)
     val shareCollageUseCase: ShareCollageUseCase get() = ShareCollageUseCase(collageStorage, shareManager)
 

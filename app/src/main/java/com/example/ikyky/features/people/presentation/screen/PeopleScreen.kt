@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
@@ -51,6 +52,7 @@ fun PeopleScreen(
     sessionId: String,
     modifier: Modifier = Modifier,
     onOpenPerson: (personId: String) -> Unit = {},
+    onMakeCollage: () -> Unit = {},
     viewModel: PeopleViewModel = viewModel(factory = LocalAppViewModelFactory.current),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -80,11 +82,20 @@ fun PeopleScreen(
                 }
 
                 Divider(Modifier.padding(vertical = 8.dp))
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     items(state.people, key = { it.id }) { person ->
                         PersonCard(person = person, onClick = { onOpenPerson(person.id) })
                     }
                 }
+
+                Button(
+                    onClick = onMakeCollage,
+                    enabled = state.people.isNotEmpty(),
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                ) { Text("Make collage") }
             }
         }
     }
