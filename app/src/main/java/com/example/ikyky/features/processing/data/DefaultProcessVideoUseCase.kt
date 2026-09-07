@@ -446,6 +446,9 @@ class DefaultProcessVideoUseCase(
                 face = canonicalFace,
                 qualityScore = q.score,
                 usable = q.isUsable,
+                // Carried through for Phase 8.2 representative-candidate ranking;
+                // never read by the tracker.
+                blurVariance = q.blurVariance,
             )
         }
         return out

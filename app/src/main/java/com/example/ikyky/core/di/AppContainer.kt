@@ -23,7 +23,6 @@ import com.example.ikyky.core.ml.model.EmbeddingModelLoader
 import com.example.ikyky.core.ml.model.ModelSpec
 import com.example.ikyky.core.ml.preprocessing.DefaultFacePreprocessor
 import com.example.ikyky.core.ml.preprocessing.FacePreprocessor
-import com.example.ikyky.core.ml.preprocessing.SimilarityTransformFaceAligner
 import com.example.ikyky.core.storage.CollageStorage
 import com.example.ikyky.core.storage.RepresentativeImageStorage
 import com.example.ikyky.core.storage.ShareManager
@@ -222,16 +221,16 @@ class AppContainer(context: Context) {
     }
 
     /**
-     * Phase 7 — picks each [com.example.ikyky.features.people.domain.model.Person]'s
-     * representative crop (highest-[com.example.ikyky.features.processing.domain.model.AppearanceCandidate.bestQuality]
-     * appearance's already-recorded best frame) and persists it via
-     * [representativeImageStorage]. A pure presentation step; never touches
-     * clustering or the frozen recognition path.
+     * Phase 7/8.1 — picks each [com.example.ikyky.features.people.domain.model.Person]'s
+     * individual-person representative crop (best usable observation across all
+     * of that person's appearances, per
+     * [com.example.ikyky.core.ml.preprocessing.PresentationFaceCropper]) and
+     * persists it via [representativeImageStorage]. A pure presentation step;
+     * never touches clustering or the frozen recognition path.
      */
     val selectRepresentativeImagesUseCase: SelectRepresentativeImagesUseCase by lazy {
         SelectRepresentativeImagesUseCase(
             frameExtractor = videoFrameExtractor,
-            aligner = SimilarityTransformFaceAligner(),
             storage = representativeImageStorage,
             logger = logger,
         )

@@ -14,7 +14,6 @@ import com.example.ikyky.core.ml.embedding.LiteRtFaceEmbedder
 import com.example.ikyky.core.ml.model.EmbeddingModelLoader
 import com.example.ikyky.core.ml.model.ModelSpec
 import com.example.ikyky.core.ml.preprocessing.DefaultFacePreprocessor
-import com.example.ikyky.core.ml.preprocessing.SimilarityTransformFaceAligner
 import com.example.ikyky.core.storage.impl.CacheRepresentativeImageStorage
 import com.example.ikyky.features.people.data.FrozenBuildIdentitiesUseCase
 import com.example.ikyky.features.people.domain.repository.PeopleResultRepository
@@ -120,7 +119,6 @@ class Phase7PeopleProductLayerTest {
             // --- Phase 7: representative image selection ----------------------
             val selectImages = SelectRepresentativeImagesUseCase(
                 frameExtractor = MediaMetadataFrameExtractor(context, d),
-                aligner = SimilarityTransformFaceAligner(),
                 storage = imageStorage,
                 logger = logger,
             )

@@ -2,6 +2,7 @@ package com.example.ikyky.features.processing.domain.model
 
 import com.example.ikyky.core.ml.tracking.FaceObservation
 import com.example.ikyky.core.model.BoundingBox
+import com.example.ikyky.core.model.HeadPose
 import com.example.ikyky.core.model.Landmark
 
 /**
@@ -10,6 +11,10 @@ import com.example.ikyky.core.model.Landmark
  * and re-decode several frames within an appearance. Holds NO bitmaps — the
  * caller re-decodes [timestampMs] on demand and uses [canonicalBox] +
  * [landmarks] for the recognition crop / alignment.
+ *
+ * [blurVariance], [headPose] and the eye-open probabilities are **carried for
+ * Phase 8.2 representative-candidate ranking only** — they are additive fields
+ * with inert defaults, never consulted by tracking or clustering.
  */
 data class AppearanceObservationRef(
     val observationId: String,
@@ -24,6 +29,12 @@ data class AppearanceObservationRef(
     val qualityScore: Float,
     /** Phase-2 "usable" flag (below the cheap quality line if false). */
     val usable: Boolean,
+    /** Variance-of-Laplacian of the face patch (higher = sharper); `NaN` if unmeasured. */
+    val blurVariance: Double = Double.NaN,
+    /** ML Kit head Euler angles, if the detector reported them. */
+    val headPose: HeadPose? = null,
+    val leftEyeOpenProbability: Float? = null,
+    val rightEyeOpenProbability: Float? = null,
 )
 
 /**
@@ -95,6 +106,10 @@ data class AppearanceCandidate(
                         landmarks = o.face.landmarks,
                         qualityScore = o.qualityScore,
                         usable = o.usable,
+                        blurVariance = o.blurVariance,
+                        headPose = o.face.headPose,
+                        leftEyeOpenProbability = o.face.leftEyeOpenProbability,
+                        rightEyeOpenProbability = o.face.rightEyeOpenProbability,
                     )
                 },
             )

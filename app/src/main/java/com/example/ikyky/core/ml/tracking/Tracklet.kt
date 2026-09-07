@@ -10,6 +10,12 @@ import com.example.ikyky.core.model.DetectedFace
  * coordinates. [qualityScore] is the cheap Phase 2 signal (0f..1f); [usable]
  * is its reject flag. Low-quality observations are still kept for tracking
  * continuity — quality only matters for later representative-frame selection.
+ *
+ * [blurVariance] is the variance-of-Laplacian of the face patch measured during
+ * detection (higher = sharper; `NaN` when it could not be measured). It is
+ * **carried data only** — the tracker never reads it; it exists so Phase 8.2's
+ * representative-candidate selection can rank on real sharpness instead of the
+ * saturated [qualityScore].
  */
 data class FaceObservation(
     val id: String,
@@ -18,6 +24,7 @@ data class FaceObservation(
     val face: DetectedFace,
     val qualityScore: Float = 1f,
     val usable: Boolean = true,
+    val blurVariance: Double = Double.NaN,
 ) {
     val box: BoundingBox get() = face.boundingBox
     val trackingId: Int? get() = face.trackingId

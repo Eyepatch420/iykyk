@@ -5,45 +5,65 @@ import com.example.ikyky.core.common.result.AppResult
 import com.example.ikyky.core.logging.Logger
 import com.example.ikyky.core.media.VideoFrameExtractor
 import com.example.ikyky.core.media.VideoMetadata
-import com.example.ikyky.core.ml.preprocessing.SimilarityTransformFaceAligner
+import com.example.ikyky.core.ml.preprocessing.PresentationFaceCropper
 import com.example.ikyky.core.model.BoundingBox
-import com.example.ikyky.core.model.DetectedFace
+import com.example.ikyky.core.model.Landmark
 import com.example.ikyky.core.model.VideoFrame
 import com.example.ikyky.core.storage.RepresentativeImageStorage
 import com.example.ikyky.features.people.domain.model.Person
 import com.example.ikyky.features.people.domain.model.RepresentativeFrame
 import com.example.ikyky.features.processing.domain.model.AppearanceCandidate
+import com.example.ikyky.features.processing.domain.model.AppearanceObservationRef
 
 /**
- * Picks and persists **one representative crop per [Person]**, populating the
- * previously-always-null [Person.representativeFrame].
+ * Picks and persists **one individual-person representative crop per [Person]**,
+ * populating the previously-always-null [Person.representativeFrame].
  *
- * Selection is a lookup, not a new algorithm: for each person, take the
- * [AppearanceCandidate] among their appearances with the highest
- * [AppearanceCandidate.bestQuality] (already computed by Phase 2's
- * `AppearanceCandidate.fromObservations` — `observations.maxBy { it.qualityScore }`),
- * then re-decode that appearance's already-recorded
- * [AppearanceCandidate.bestFrameTimestampMs] and crop
- * [AppearanceCandidate.bestFrameBox] with the margin-expanded **presentation**
- * geometry ([SimilarityTransformFaceAligner.presentationCrop] — un-aligned, more
- * generous than the 112x112 recognition crop, and deliberately NOT the
- * `ArcFaceFivePointAligner` the frozen recognition path uses; mixing the two
- * crops is exactly the confusion the Phase 6 crop-naming discipline exists to
- * prevent).
+ * ## Phase 8.2 — reject-then-rank
  *
- * One frame is decoded and cropped per PERSON (not per appearance, not per
- * observation) — for a typical 5-10 person result that's 5-10 extra decodes,
- * negligible next to the ~750-frame shot scan. The produced bitmap is written
- * to [RepresentativeImageStorage] and immediately released; nothing here
- * retains a `Bitmap` past this function call, matching the Phase 6 lifecycle
- * discipline (one working bitmap at a time, no retention past its use).
+ * Selection is delegated to [RepresentativeCandidateEvaluator], which for each
+ * person:
+ *  1. **rejects** invalid candidate observations — oversized ML-Kit boxes (C1),
+ *     corner false positives (C2), too-soft / extreme-pose frames (C3),
+ *     degenerate landmark geometry, crops that would contain a second person,
+ *     and crops where the target face is mostly absent;
+ *  2. **ranks** survivors on real signals (landmark completeness, sharpness,
+ *     pose frontality, face-size sanity, temporal position) — never on the
+ *     saturated Phase-2 `qualityScore`;
+ *  3. prefers a **landmark-tight** crop; a detection-box crop is an explicit
+ *     lower-priority fallback; if nothing valid remains the person's
+ *     representative is left **unavailable** (`representativeFrame = null`) — a
+ *     full source frame is NEVER used.
+ *
+ * The chosen crop is produced by [PresentationFaceCropper]: from the facial
+ * landmarks when available ([PresentationFaceCropper.cropFromLandmarks]), else
+ * from the detection box, always neighbour-trimmed against the other faces in
+ * that frame. Nothing here touches detection / tracking / MNL / clustering / the
+ * MobileFaceNet recognition crop, and no extra ML inference is run.
+ *
+ * One frame is decoded and cropped per PERSON; the bitmap is written to
+ * [RepresentativeImageStorage] and immediately released.
  */
 class SelectRepresentativeImagesUseCase(
     private val frameExtractor: VideoFrameExtractor,
-    private val aligner: SimilarityTransformFaceAligner,
     private val storage: RepresentativeImageStorage,
     private val logger: Logger,
 ) {
+
+    /** Per-session diagnostics for the Phase 8.2 before/after report. */
+    data class Diagnostics(
+        val peopleConsidered: Int = 0,
+        val observationsConsidered: Int = 0,
+        val rejectedByReason: Map<RepresentativeCandidateEvaluator.Reject, Int> = emptyMap(),
+        val acceptedCandidates: Int = 0,
+        val landmarkTightCrops: Int = 0,
+        val detectionBoxFallbacks: Int = 0,
+        val representativesUnavailable: Int = 0,
+        val representativesPersisted: Int = 0,
+    )
+
+    var lastDiagnostics: Diagnostics = Diagnostics()
+        private set
 
     suspend fun select(
         sessionId: String,
@@ -53,37 +73,115 @@ class SelectRepresentativeImagesUseCase(
         candidates: List<AppearanceCandidate>,
     ): List<Person> {
         val byId = candidates.associateBy { it.id }
-        return people.map { person -> withRepresentativeFrame(sessionId, uriString, metadata, person, byId) }
+        // Every detected face box per frame index, across every candidate — the
+        // sibling set for neighbour-trim and the one-person check.
+        val boxesByFrame: Map<Int, List<BoundingBox>> = buildMap {
+            for (c in candidates) for (o in c.observations) {
+                getOrPut(o.frameIndex) { ArrayList() }.let { (it as ArrayList).add(o.canonicalBox) }
+            }
+        }
+
+        val rejectTally = LinkedHashMap<RepresentativeCandidateEvaluator.Reject, Int>()
+        var obsConsidered = 0
+        var accepted = 0
+        var landmarkTight = 0
+        var fallbacks = 0
+        var unavailable = 0
+        var persisted = 0
+
+        val out = people.map { person ->
+            val appearances = person.appearanceIds.mapNotNull { byId[it] }
+            if (appearances.isEmpty()) {
+                unavailable++
+                return@map person
+            }
+
+            val eval = RepresentativeCandidateEvaluator.evaluate(
+                observationsByAppearance = appearances.associate { it.id to it.observations },
+                frameWidth = metadata.displayWidth,
+                frameHeight = metadata.displayHeight,
+                faceBoxesByFrame = boxesByFrame,
+            )
+            obsConsidered += eval.consideredCount
+            accepted += eval.acceptedCount
+            eval.rejected.values.forEach { r -> rejectTally.merge(r, 1, Int::plus) }
+
+            val candidate = eval.chosen
+            if (candidate == null) {
+                unavailable++
+                logger.w(
+                    TAG,
+                    "${person.id}: no valid representative candidate " +
+                        "(${eval.consideredCount} considered, all rejected: ${eval.rejected.values.groupingBy { it }.eachCount()})",
+                )
+                return@map person
+            }
+            if (candidate.cropKind == RepresentativeCandidateEvaluator.CropKind.LANDMARK_TIGHT) landmarkTight++
+            else fallbacks++
+
+            val updated = persist(sessionId, uriString, metadata, person, candidate, boxesByFrame)
+            if (updated.representativeFrame != null) persisted++ else unavailable++
+            updated
+        }
+
+        lastDiagnostics = Diagnostics(
+            peopleConsidered = people.size,
+            observationsConsidered = obsConsidered,
+            rejectedByReason = rejectTally,
+            acceptedCandidates = accepted,
+            landmarkTightCrops = landmarkTight,
+            detectionBoxFallbacks = fallbacks,
+            representativesUnavailable = unavailable,
+            representativesPersisted = persisted,
+        )
+        logger.i(TAG, "Phase 8.2 representative selection: $lastDiagnostics")
+        return out
     }
 
-    private suspend fun withRepresentativeFrame(
+    private suspend fun persist(
         sessionId: String,
         uriString: String,
         metadata: VideoMetadata,
         person: Person,
-        byId: Map<String, AppearanceCandidate>,
+        candidate: RepresentativeCandidateEvaluator.Candidate,
+        boxesByFrame: Map<Int, List<BoundingBox>>,
     ): Person {
-        val best = person.appearanceIds
-            .mapNotNull { byId[it] }
-            .maxByOrNull { it.bestQuality }
-            ?: return person
-
-        val frame: VideoFrame = frameExtractor.decodeFrameAt(uriString, metadata, best.bestFrameTimestampMs)
+        val obs = candidate.observation
+        val frame: VideoFrame = frameExtractor.decodeFrameAt(uriString, metadata, obs.timestampMs)
             ?: run {
-                logger.w(TAG, "${person.id}: could not re-decode @${best.bestFrameTimestampMs}ms")
+                logger.w(TAG, "${person.id}: could not re-decode @${obs.timestampMs}ms — representative unavailable")
                 return person
             }
 
         return try {
             val s = frame.geometry.scale
-            val faceInDecoded = DetectedFace(
-                boundingBox = scaleBox(best.bestFrameBox, s),
-            )
-            val crop: Bitmap = aligner.presentationCrop(frame.bitmap, faceInDecoded)
-                ?: run {
-                    logger.w(TAG, "${person.id}: presentation crop unusable")
-                    return person
-                }
+            val boxInDecoded = scaleBox(obs.canonicalBox, s)
+            val lmInDecoded = obs.landmarks.map { scaleLandmark(it, s) }
+            val siblings = (boxesByFrame[obs.frameIndex] ?: emptyList())
+                .filter { it != obs.canonicalBox }
+                .map { scaleBox(it, s) }
+
+            val crop: Bitmap? = when (candidate.cropKind) {
+                RepresentativeCandidateEvaluator.CropKind.LANDMARK_TIGHT ->
+                    PresentationFaceCropper.cropFromLandmarks(frame.bitmap, boxInDecoded, lmInDecoded, siblings)
+                // The fallback still crops landmark-tight when landmarks exist
+                // (the landmark rect is what limits the neighbour bleed); it
+                // differs only in that the evaluator ranked it below a clean
+                // landmark candidate.
+                RepresentativeCandidateEvaluator.CropKind.DETECTION_BOX_FALLBACK ->
+                    if (lmInDecoded.count { it.type in LM_CORE } >= 4)
+                        PresentationFaceCropper.cropFromLandmarks(frame.bitmap, boxInDecoded, lmInDecoded, siblings)
+                    else
+                        PresentationFaceCropper.crop(frame.bitmap, boxInDecoded, siblings)
+            }
+            if (crop == null) {
+                // The evaluator already validated the rect; a null here means the
+                // decoded-space rect degenerated. Representative stays unavailable
+                // — we do NOT fall back to the full frame (Phase 8.2 invariant).
+                logger.w(TAG, "${person.id}: crop rect degenerate at decode time — representative unavailable")
+                return person
+            }
+
             val saved = try {
                 storage.save(sessionId, person.id, crop)
             } finally {
@@ -93,11 +191,12 @@ class SelectRepresentativeImagesUseCase(
                 is AppResult.Success -> person.copy(
                     representativeFrame = RepresentativeFrame(
                         personId = person.id,
-                        sourceObservationId = best.id,
-                        frameIndex = best.bestFrameIndex,
-                        timestampMs = best.bestFrameTimestampMs,
+                        sourceObservationId = candidate.appearanceId,
+                        frameIndex = obs.frameIndex,
+                        timestampMs = obs.timestampMs,
                         presentationCropKey = saved.value.toString(),
-                        qualityScore = best.bestQuality,
+                        // Real composite quality now, not the saturated Phase-2 max.
+                        qualityScore = candidate.score,
                     ),
                 )
                 is AppResult.Failure -> {
@@ -117,7 +216,22 @@ class SelectRepresentativeImagesUseCase(
         bottom = (box.bottom * s).toInt(),
     )
 
+    private fun scaleLandmark(l: Landmark, s: Float): Landmark = l.copy(x = l.x * s, y = l.y * s)
+
     private companion object {
         const val TAG = "SelectRepresentativeImages"
+
+        val LM_CORE = setOf(
+            com.example.ikyky.core.model.LandmarkType.LEFT_EYE,
+            com.example.ikyky.core.model.LandmarkType.RIGHT_EYE,
+            com.example.ikyky.core.model.LandmarkType.NOSE_BASE,
+            com.example.ikyky.core.model.LandmarkType.MOUTH_LEFT,
+            com.example.ikyky.core.model.LandmarkType.MOUTH_RIGHT,
+            com.example.ikyky.core.model.LandmarkType.MOUTH_BOTTOM,
+            com.example.ikyky.core.model.LandmarkType.LEFT_EAR,
+            com.example.ikyky.core.model.LandmarkType.RIGHT_EAR,
+            com.example.ikyky.core.model.LandmarkType.LEFT_CHEEK,
+            com.example.ikyky.core.model.LandmarkType.RIGHT_CHEEK,
+        )
     }
 }

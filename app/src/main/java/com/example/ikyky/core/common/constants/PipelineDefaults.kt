@@ -174,8 +174,160 @@ object PipelineDefaults {
     // Crops
     // ---------------------------------------------------------------------------
 
-    /** Presentation (collage) crop — generous margin around the detection box. */
+    /**
+     * Presentation (collage) crop — generous margin around the detection box.
+     *
+     * **RETIRED as of Phase 8.1.** At 0.6 (60% expansion on every side) this
+     * routinely pulled a neighboring person into the crop whenever two people
+     * stood at typical conversational distance in frame — the exact bug Phase
+     * 8.1 fixed. [com.example.ikyky.core.ml.preprocessing.PresentationFaceCropper]
+     * is the replacement; it uses [PRESENTATION_CROP_MARGIN_HORIZONTAL] /
+     * [PRESENTATION_CROP_MARGIN_VERTICAL] instead. Kept only so
+     * [com.example.ikyky.core.ml.preprocessing.SimilarityTransformFaceAligner.presentationCrop]
+     * (currently unused in production — `includePresentationCrop = false` at its
+     * one call site) still compiles; do not wire new callers to either.
+     */
     const val PRESENTATION_CROP_MARGIN: Float = 0.6f
+
+    /**
+     * The FIXED, single-person-safe presentation crop margins (Phase 8.1).
+     * Deliberately the same values already proven not to swallow a neighboring
+     * face at typical framing —
+     * [com.example.ikyky.core.ml.preprocessing.TrackerAppearanceCrop] has used
+     * this same expansion in production since Phase 6 — but declared as a
+     * SEPARATE constant so presentation framing can be tuned independently of
+     * that frozen recognition-adjacent value without ever touching it.
+     */
+    const val PRESENTATION_CROP_MARGIN_HORIZONTAL: Float = 0.30f
+    const val PRESENTATION_CROP_MARGIN_VERTICAL: Float = 0.40f
+
+    // -------------------------------------------------------------------------
+    // Phase 8.2 — representative-candidate quality gates
+    //
+    // These gate REPRESENTATIVE-IMAGE candidates only. They never touch
+    // detection, tracking (Config K), MNL, embeddings, or the frozen 0.475
+    // clustering threshold. A detection rejected here stays a fully valid
+    // tracking/clustering observation; it is simply not eligible to be the
+    // face shown for that person.
+    // -------------------------------------------------------------------------
+
+    /**
+     * **C1 — oversized detection gate.** Reject a representative candidate whose
+     * detection box longer edge exceeds this fraction of the frame's short edge.
+     *
+     * Evidence (Phase 8.2 audit, per-observation geometry over sample_1/2/3,
+     * n≈694): `max(ff_w,ff_h)` has median **0.82** and p90 ≈ **1.1–1.2** — on
+     * this close-up talking-head material ML Kit's boxes are *systematically*
+     * large, so a gate anywhere near the median would reject most legitimate
+     * frames and leave people with no representative. Only boxes **wider than
+     * the frame itself** (`ff > 1.0`, p90–max range, physically impossible for a
+     * real face) are unambiguously pathological. 1.05 gives a small tolerance
+     * above exactly-frame-width. Normal large close-ups are instead handled by
+     * the landmark-tight crop (which ignores the oversized box) and down-ranked
+     * by the composite face-size term.
+     */
+    const val REP_MAX_FACE_FRACTION: Float = 1.05f
+
+    /**
+     * **C1 (area form).** Detection-box area over frame area. Audit p90 ≈
+     * 0.55–0.61, max ≈ 0.79; a box covering **> 62 %** of the frame is
+     * head + shoulders + background, not a face.
+     */
+    const val REP_MAX_FACE_AREA_FRACTION: Float = 0.62f
+
+    /**
+     * **C1 (minimum).** A representative face must occupy at least this fraction
+     * of the frame short edge. Every legitimate close-up in the audit is
+     * ff ≥ 0.37; a box at ff < 0.20 (e.g. audit `[690,644,770,726]`, ff 0.076)
+     * is a distant / background face ML Kit fitted landmarks to — far too small
+     * for a portrait. This is a *representative* gate, not a detection gate:
+     * the small detection stays valid for tracking.
+     */
+    const val REP_MIN_FACE_FRACTION: Float = 0.20f
+
+    /**
+     * **C2 — corner false-positive gate.** A candidate is a corner artefact when
+     * ALL of:
+     *  - its box has ≥ [REP_CORNER_MIN_EDGES] sides within [REP_CORNER_EDGE_PX]
+     *    of the frame border (pinned into a corner),
+     *  - the box is small — longer edge < [REP_CORNER_MAX_FACE_FRACTION] of the
+     *    frame short edge (a real corner-touching face on this material is
+     *    large, ff ≳ 0.6; the audit's false positive `[0,0,490,518]` is
+     *    ff ≈ 0.48),
+     *  - its landmarks span less than [REP_MIN_LANDMARK_SPAN] of the box (a real
+     *    face fills its box with landmarks; the false positive does not).
+     */
+    const val REP_CORNER_EDGE_PX: Int = 40
+    const val REP_CORNER_MIN_EDGES: Int = 2
+    const val REP_CORNER_MAX_FACE_FRACTION: Float = 0.55f
+    const val REP_MIN_LANDMARK_SPAN: Float = 0.45f
+
+    /**
+     * **C2b — small-box-against-an-edge gate.** A representative candidate whose
+     * box touches a frame border (within [REP_EDGE_TOUCH_PX]) AND is smaller
+     * than [REP_EDGE_SMALL_MAX_FACE_FRACTION] of the frame short edge is a
+     * partial / false-positive detection. Audit: legitimate small close-ups
+     * (ff ≈ 0.37–0.40) sit fully inside the frame; every spurious edge box seen
+     * (`[191,0,635,349]` ff 0.41, `[0,0,490,518]` ff 0.48, `[0,0,456,268]`
+     * ff 0.42) both touches a border and is small. A genuinely large face near
+     * an edge (ff ≳ 0.5) is unaffected.
+     */
+    const val REP_EDGE_TOUCH_PX: Int = 4
+    const val REP_EDGE_SMALL_MAX_FACE_FRACTION: Float = 0.50f
+
+    /**
+     * **C3 — sharpness floor for a representative (conservative gate).**
+     * Variance-of-Laplacian below this is rejected outright as unshowably soft.
+     * Set close to the Phase-2 tracking floor (`BLUR_VARIANCE_MIN = 12`) rather
+     * than to typical blur-detection practice (100–1000), because the
+     * per-observation blur distribution on this material has not been
+     * characterised and a high floor risks rejecting every frame of a person
+     * (STOP condition). Sharpness does most of its work as a **ranking** signal
+     * ([REP_BLUR_VARIANCE_IDEAL]); this gate only removes the clearly-worst.
+     * `NaN` (unmeasured) never rejects.
+     */
+    const val REP_MIN_BLUR_VARIANCE: Double = 15.0
+
+    /**
+     * Variance-of-Laplacian at which the ranking sharpness term saturates to
+     * 1.0. A frame at or above this is "sharp enough"; below it the term scales
+     * linearly. Tunable once the distribution is measured.
+     */
+    const val REP_BLUR_VARIANCE_IDEAL: Double = 150.0
+
+    /**
+     * **C3 — pose ceiling for a representative.** Reject a candidate whose head
+     * yaw or pitch magnitude (ML Kit Euler degrees) exceeds this. 32° keeps
+     * natural three-quarter views, drops hard profiles / extreme up-down.
+     */
+    const val REP_MAX_HEAD_ANGLE_DEG: Float = 32f
+
+    /**
+     * **Hard one-person check.** A non-target face is "substantially present" in
+     * the proposed crop when EITHER this fraction of its own box area lies
+     * inside the crop, OR at least [REP_FOREIGN_FACE_MAX_PX] of its width AND
+     * height do — then the candidate is INVALID. The pixel form catches the
+     * "5 % of a large face box = a whole recognisable cheek + eye" case that a
+     * pure area fraction misses (audit sample_1 person_3).
+     */
+    const val REP_FOREIGN_FACE_MAX_OVERLAP: Float = 0.15f
+    const val REP_FOREIGN_FACE_MAX_PX: Int = 60
+
+    /**
+     * **Face-shape sanity for a representative candidate.** A real upright face
+     * detection box has height/width roughly in [0.72, 2.1]. ML Kit sometimes
+     * emits a short wide slab (e.g. audit `[0,0,456,268]`, ratio 0.59) that
+     * carries a full landmark set but is not a usable face — reject it.
+     */
+    const val REP_MIN_BOX_ASPECT: Float = 0.72f
+    const val REP_MAX_BOX_ASPECT: Float = 2.10f
+
+    /**
+     * **Zero / partial-face check.** The target face must occupy at least this
+     * fraction of the final crop area, else the crop is a fragment (ear-only,
+     * background) and the candidate is INVALID.
+     */
+    const val REP_TARGET_MIN_FRACTION_OF_CROP: Float = 0.12f
 
     /**
      * Legacy single-margin recognition value (kept for older call sites). The
