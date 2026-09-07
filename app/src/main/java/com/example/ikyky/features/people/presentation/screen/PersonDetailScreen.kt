@@ -1,51 +1,48 @@
 package com.example.ikyky.features.people.presentation.screen
 
 import android.net.Uri
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Divider
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ikyky.core.di.LocalAppViewModelFactory
+import com.example.ikyky.core.ui.components.AppScreen
+import com.example.ikyky.core.ui.components.AppTopBar
+import com.example.ikyky.core.ui.components.LoadingContent
+import com.example.ikyky.core.ui.components.MessageState
 import com.example.ikyky.core.ui.components.UriImage
+import com.example.ikyky.core.ui.theme.AppShape
+import com.example.ikyky.core.ui.theme.Spacing
 import com.example.ikyky.features.people.domain.model.Appearance
 import com.example.ikyky.features.people.presentation.viewmodel.PersonDetailViewModel
 
 /**
- * Grid of one [Person][com.example.ikyky.features.people.domain.model.Person]'s
- * [Appearance]s — the validation surface Phase 7 §8 exists for: inspect
- * grouping quality, representative-frame quality, and spot junk/duplicate/
- * split appearances BEFORE any collage work begins.
- *
- * Each tile currently shows the appearance's timing/quality metadata only —
- * there is no per-appearance crop persisted yet (only one crop per PERSON is
- * produced, by [com.example.ikyky.features.people.domain.usecase.SelectRepresentativeImagesUseCase]);
- * the person's single representative image is shown at the top for reference.
+ * One person's page: a large hero portrait, a plain caption, then each
+ * appearance as a quiet timeline row (where in the video it occurs, and how
+ * long). No per-appearance crop exists in the domain, so the rows stay visual
+ * without inventing data; timing is shown in seconds, not ML terminology.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PersonDetailScreen(
     sessionId: String,
@@ -57,40 +54,62 @@ fun PersonDetailScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     LaunchedEffect(sessionId, personId) { viewModel.load(sessionId, personId) }
 
-    Column(modifier = modifier.fillMaxSize()) {
-        TopAppBar(
-            title = { Text(state.person?.label ?: "Person") },
-            navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
-        )
-
+    AppScreen(
+        modifier = modifier,
+        topBar = { AppTopBar(title = "Person", onBack = onBack) },
+        horizontalPadding = Spacing.screenHTight,
+    ) {
         when {
-            state.loading -> CircularProgressIndicator(Modifier.padding(24.dp))
-            state.error != null -> Text("Error: ${state.error}", Modifier.padding(24.dp))
-            else -> Column(Modifier.padding(16.dp)) {
-                val cropUri = state.person?.representativeFrame?.presentationCropKey?.let(Uri::parse)
-                UriImage(
-                    uri = cropUri,
-                    contentDescription = state.person?.label,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(1f)
-                        .clip(RoundedCornerShape(12.dp)),
-                )
+            state.loading -> LoadingContent()
+            state.error != null -> MessageState(
+                title = "We couldn't open this person",
+                body = "Go back and pick another.",
+                actionLabel = "Back",
+                onAction = onBack,
+            )
 
-                Divider(Modifier.padding(vertical = 12.dp))
-                Text(
-                    "${state.appearances.size} appearance(s)",
-                    fontWeight = FontWeight.Bold,
-                )
-
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(top = 8.dp),
+            else -> {
+                val appearances = state.appearances
+                val spanMs = appearances.maxOfOrNull { it.endTimestampMs } ?: 1L
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        top = Spacing.xs, bottom = Spacing.xxl,
+                    ),
                 ) {
-                    items(state.appearances, key = { it.id }) { appearance ->
-                        AppearanceTile(appearance)
+                    item {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(1f)
+                                .clip(AppShape.image)
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                        ) {
+                            val cropUri = state.person?.representativeFrame
+                                ?.presentationCropKey?.let(Uri::parse)
+                            if (cropUri != null) {
+                                UriImage(
+                                    uri = cropUri,
+                                    contentDescription = "This person",
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(Spacing.md))
+                        Text(
+                            appearancesLabel(appearances.size),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            "Where this person shows up in the video",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(Spacing.md))
+                    }
+                    items(appearances, key = { it.id }) { appearance ->
+                        AppearanceRow(appearance = appearance, totalMs = spanMs)
                     }
                 }
             }
@@ -99,18 +118,50 @@ fun PersonDetailScreen(
 }
 
 @Composable
-private fun AppearanceTile(appearance: Appearance, modifier: Modifier = Modifier) {
-    Card(modifier = modifier.fillMaxWidth()) {
-        Column(Modifier.padding(10.dp)) {
-            Text(appearance.id, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
-            Text(
-                "${appearance.startTimestampMs / 1000.0}s – ${appearance.endTimestampMs / 1000.0}s",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                "quality ${"%.2f".format(appearance.bestQuality)} · ${appearance.observationCount} obs",
-                style = MaterialTheme.typography.bodySmall,
+private fun AppearanceRow(appearance: Appearance, totalMs: Long, modifier: Modifier = Modifier) {
+    val startFrac = (appearance.startTimestampMs.toFloat() / totalMs).coerceIn(0f, 1f)
+    val widthFrac = ((appearance.endTimestampMs - appearance.startTimestampMs)
+        .toFloat() / totalMs).coerceIn(0.02f, 1f)
+
+    Column(modifier.padding(vertical = Spacing.sm)) {
+        Text(
+            timeRange(appearance.startTimestampMs, appearance.endTimestampMs),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(Modifier.height(Spacing.xs))
+        // A thin track with a filled segment marking this appearance's span.
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(4.dp)
+                .clip(AppShape.pill)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(widthFrac)
+                    .height(4.dp)
+                    .clip(AppShape.pill)
+                    .background(MaterialTheme.colorScheme.onSurfaceVariant),
+                content = {},
             )
         }
+        Spacer(Modifier.height(Spacing.xxs))
+        Text(
+            durationLabel(appearance.durationMs),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
+
+private fun timeRange(startMs: Long, endMs: Long): String =
+    "%.1fs – %.1fs".format(startMs / 1000.0, endMs / 1000.0)
+
+private fun durationLabel(ms: Long): String {
+    val s = ms / 1000.0
+    return if (s < 1.0) "under a second" else "%.1f seconds on screen".format(s)
+}
+
+private fun appearancesLabel(n: Int) = if (n == 1) "1 appearance" else "$n appearances"

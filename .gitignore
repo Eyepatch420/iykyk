@@ -24,3 +24,6 @@ local.properties
 
 # IDE metadata that churns on its own
 /.idea/
+
+# Local release signing (keystore + password must not be committed)
+/app/release.jks
